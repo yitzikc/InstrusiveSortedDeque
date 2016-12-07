@@ -47,8 +47,32 @@ public:
 	using typename StdDeque::reference;
 	using typename StdDeque::const_reference;
 
+	// A user-supplied key type
 	typedef typename T::KeyType key_type;
 	typedef T value_type;
+
+	// A key-type supporting quick access. Essentially a thin wrapper around indexes of the underlying deque class
+	class quick_key_type {
+		int m_index;
+
+		enum { INVALID_INDEX = -1, MIN_VALID_INDEX = 0 };
+
+		friend class InstrusiveSortedDeque;
+
+		explicit constexpr quick_key_type(int index = INVALID_INDEX)
+		{
+			m_index = index;
+		}
+
+	public:
+		constexpr quick_key_type(const quick_key_type&) = default;
+		constexpr quick_key_type& operator=(const quick_key_type&) = default;
+		constexpr bool is_valid() const { return m_index >= MIN_VALID_INDEX; }
+		constexpr bool is_front() const { return m_index == MIN_VALID_INDEX; }
+		constexpr bool operator==(quick_key_type other) { return other.m_index == m_index; }
+		constexpr bool operator< (quick_key_type other) { return other.m_index <  m_index; }
+		~quick_key_type() = default;
+	};
 
 	typedef boost::filter_iterator<FilterPredicateType, typename StdDeque::iterator> iterator;
 	typedef boost::filter_iterator<FilterPredicateType, typename StdDeque::const_iterator> const_iterator;
@@ -99,6 +123,27 @@ public:
 		static_cast<StdDeque*>(this)->operator=(other);
 		m_nMarkedAsErased = other.m_nMarkedAsErased;
 		return *this;
+	}
+
+	// Accessors by quick_key
+	reference at(quick_key_type key)
+	{
+		return GetByQuickKey<reference>(this, key);
+	}
+
+	const_reference at(quick_key_type key) const
+	{
+		return GetByQuickKey<const_reference>(this, key);
+	}
+
+	reference operator[](quick_key_type key)
+	{
+		return GetByQuickKey<reference>(this, key);
+	}
+
+	const_reference operator[](quick_key_type key) const
+	{
+		return GetByQuickKey<const_reference>(this, key);
 	}
 
 	// Methods for obtaining forward iterators
@@ -173,9 +218,19 @@ public:
 		return end();
 	}
 
+	iterator quick_key_to_iterator(quick_key_type qk)
+	{
+		return QuickKeyToIterator(this, qk);
+	}
+
+	const_iterator quick_key_to_iterator(quick_key_type qk) const
+	{
+		return QuickKeyToIterator(this, qk);
+	}
+
 	size_type size() const
 	{
-		const size_type baseSize = StdDeque::size();
+		const size_type baseSize = capacity();
 		if (baseSize <= 1) {
 			assert(0 == m_nMarkedAsErased);
 			return baseSize;
@@ -186,18 +241,46 @@ public:
 		return netSize;
 	}
 
+	// Size of the underlying deque
+	size_type capacity() const
+	{
+		return StdDeque::size();
+	}
+
+	// Find methods which return an iterator to the specified key using a binary search
 	const_iterator find(key_type k) const
 	{
 		typename StdDeque::const_iterator it;
-		DoFind(it, StdDeque::cbegin(), StdDeque::cend(), k);
+		DoFind(this, it, StdDeque::cbegin(), StdDeque::cend(), k);
 		return MakeFilteredIter(this, std::move(it));
 	}
 
+	// Find methods which return an iterator to the specified key using a binary search
 	iterator find(key_type k)
 	{
 		typename StdDeque::iterator it;
-		DoFind(it, StdDeque::begin(), StdDeque::end(), k);
+		DoFind(this, it, StdDeque::begin(), StdDeque::end(), k);
 		return MakeFilteredIter(this, std::move(it));
+	}
+
+	// An alternate find, starts by searching at the front of the deque before trying the usual search,
+	// and returns a 'quick key' instead of an iterator
+	quick_key_type find_front(key_type userKey) const
+	{
+		if (! this->empty()) {
+			if (this->front().GetKey() == userKey) {
+				return quick_key_type(quick_key_type::MIN_VALID_INDEX);
+			}
+			else {
+				// TODO: cache the result that we find here, and try searching from the cached value.
+				typename StdDeque::const_iterator it;
+				if (DoFind(this, it, StdDeque::cbegin(), StdDeque::cend(), userKey)) {
+					return quick_key_type(it - StdDeque::cbegin());
+				}
+			}
+		}
+
+		return quick_key_type();
 	}
 
 	void erase(iterator& it)
@@ -211,12 +294,16 @@ public:
 	bool erase(key_type k)
 	{
 		typename StdDeque::iterator it;
-		if (DoFind(it, StdDeque::begin(), StdDeque::end(), k)) {
-			erase(it);
-			return true;
+		if (DoFind(this, it, StdDeque::begin(), StdDeque::end(), k)) {
+			return erase(it);
 		}
 
 		return false;
+	}
+
+	bool erase(quick_key_type k)
+	{
+		return erase(StdDeque::begin() + k.m_index);
 	}
 
 	void pop_front()
@@ -283,7 +370,6 @@ public:
 	}
 
 	// FIXME: Implement resize() to  to maintain the invariants for m_nMarkedAsErased if it shrinks
-	// FIXME: Override operator [] and at() with a read-only versions, so that the invariants for m_nMarkedAsErased could be maintained
 	// FIXME: Implement the other overloads of assign() to maintain the invariants for m_nMarkedAsErased
 
 private:
@@ -307,12 +393,12 @@ private:
 		return;
 	}
 
-	template <typename IterType>
-	bool DoFind(IterType& result, IterType&& beginIter, IterType&& endIter, key_type k)
+	template <typename ThisType, typename IterType>
+	static bool DoFind(ThisType thisPtr, IterType& result, IterType&& beginIter, IterType&& endIter, key_type k)
 	{
 		constexpr auto FindComp = [](const T& value, typename T::KeyType k)->bool { return value.GetKey() < k; };
 
-		if (! this->empty() && (k <= this->back().GetKey())) {
+		if (! thisPtr->empty() && (k <= thisPtr->back().GetKey())) {
 			result = std::lower_bound(beginIter, endIter, k, FindComp);
 			assert(result != endIter);
 			if ((result->GetKey() == k) && (endIter != result)) {
@@ -320,7 +406,7 @@ private:
 			}
 		}
 
-		result = this->StdDeque::end();
+		result = thisPtr->StdDeque::end();
 		return false;
 	}
 
@@ -330,6 +416,25 @@ private:
 		constexpr auto pred = [](const value_type& r) { return ! r.IsDeleted(); };
 		std::copy_if(other.StdDeque::begin(), other.StdDeque::end(), StdDeque::begin(), pred);
 		m_nMarkedAsErased = 0;
+	}
+
+	template <typename RefType, typename ThisType>
+	static inline RefType GetByQuickKey(ThisType thisPtr, quick_key_type key)
+	{
+		return thisPtr->StdDeque::at(key.m_index);
+	}
+
+	template <typename ThisType>
+	static auto QuickKeyToIterator(ThisType thisPtr, const quick_key_type qk)
+	{
+		if (qk.is_valid()) {
+			auto it = thisPtr->StdDeque::begin() + qk.m_index;
+			if (! it->IsDeleted()) {
+				return MakeFilteredIter(thisPtr, std::move(it));
+			}
+		}
+
+		return MakeFilteredIter(thisPtr, thisPtr->StdDeque::end());
 	}
 
 	// Filter iterator wrapping implementation
@@ -353,7 +458,7 @@ private:
 		assert(this->empty() || ! v.IsDeleted());
 	}
 
-	void erase(typename StdDeque::iterator it)
+	bool erase(typename StdDeque::iterator it)
 	{
 		if (! it->IsDeleted()) {
 			it->Remove();
@@ -361,14 +466,14 @@ private:
 			++m_nMarkedAsErased;
 			TrimFront();
 			TrimBack();
+			return true;
 		}
 		else {
-			assert((StdDeque::size() > 1) && (m_nMarkedAsErased > 0));
+			assert((capacity() > 1) && (m_nMarkedAsErased > 0));
 			ValidateEdge(this->front());
 			ValidateEdge(this->back());
+			return false;
 		}
-
-		return;
 	}
 };
 
