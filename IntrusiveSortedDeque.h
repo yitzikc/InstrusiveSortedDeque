@@ -343,22 +343,37 @@ public:
 		AssignFiltered(MakeFilteredIter(this, first), MakeFilteredIter(this, last));
 	}
 
-	// TODO: Provide a more flexible kind of emplace_back which can handle slightly out-of-order orders
+	// Wrappers for emplace_back() and emplace_front(), which return references to the newly created values
+	// Note that this is incompatible with the C++ 17 interface, where emplace...() methods return iterators
 
+	// A more flexible emplace_back which will attempt to emplace at the back but will insert at the correct position
+	// if the new value is not in fact greater than the last value
 	template< typename... Args >
-	void emplace_back(Args&&... args)
+	reference emplace_back(Args&&... args)
 	{
 		const_pointer const prevBack = this->empty() ? nullptr : & (this->back());
 		StdDeque::emplace_back(std::forward<Args>(args)...);
-		assert(! this->back().IsDeleted());
-		assert( (nullptr == prevBack) ||
-				((! prevBack->IsDeleted()) && (prevBack->GetKey() < this->back().GetKey())));
+		reference& back = this->back();
+		assert(! back.IsDeleted());
+		if (nullptr != prevBack) {
+			assert(! prevBack->IsDeleted());
+			if (BOOST_UNLIKELY(back.GetKey() <= prevBack->GetKey())) {
+				assert(back.GetKey() < prevBack->GetKey());
+				auto it = DoFindUnchecked(StdDeque::begin(), StdDeque::end() - 1, back.GetKey());
+				assert((it->GetKey() > back.GetKey()) && (& *it != &back));
+				auto newIt = StdDeque::emplace(it, std::move(back));
+				StdDeque::pop_back();
+				ValidateEdge(this->back());
+				return *newIt;
+			}
+		}
 
-		return;
+		return back;
 	}
 
+	// TODO: Handle out-of-place values in emplace_front like in emplace_back
 	template< typename... Args >
-	void emplace_front(Args&&... args)
+	reference emplace_front(Args&&... args)
 	{
 		const_pointer const prevFront = this->empty() ? nullptr : & (this->front());
 		StdDeque::emplace_front(std::forward<Args>(args)...);
@@ -366,7 +381,7 @@ public:
 		assert( (nullptr == prevFront) ||
 				((! prevFront->IsDeleted()) && (this->front().GetKey() < prevFront->GetKey())));
 
-		return;
+		return this->front();
 	}
 
 	// FIXME: Implement resize() to  to maintain the invariants for m_nMarkedAsErased if it shrinks
@@ -396,11 +411,10 @@ private:
 	template <typename ThisType, typename IterType>
 	static bool DoFind(ThisType thisPtr, IterType& result, IterType&& beginIter, IterType&& endIter, key_type k)
 	{
-		constexpr auto FindComp = [](const T& value, typename T::KeyType k)->bool { return value.GetKey() < k; };
-
 		if (! thisPtr->empty() && (k <= thisPtr->back().GetKey())) {
-			result = std::lower_bound(beginIter, endIter, k, FindComp);
-			assert(result != endIter);
+			result = DoFindUnchecked(beginIter, endIter, k);
+			// FIXME: We should handle cases when endIter != StdDeque::end()
+			assert(result != thisPtr->StdDeque::end());
 			if ((result->GetKey() == k) && (endIter != result)) {
 				return true;
 			}
@@ -408,6 +422,13 @@ private:
 
 		result = thisPtr->StdDeque::end();
 		return false;
+	}
+
+	template <typename IterType>
+	static inline auto DoFindUnchecked(IterType&& beginIter, IterType&& endIter, key_type k)
+	{
+		constexpr auto FindComp = [](const T& value, typename T::KeyType k)->bool { return value.GetKey() < k; };
+		return std::lower_bound(beginIter, endIter, k, FindComp);
 	}
 
 	void Clone(const InstrusiveSortedDeque& other)
