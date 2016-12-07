@@ -15,7 +15,7 @@
 
 namespace Utils {
 
-// InstrusiveSortedDeque: A deque containing sorted values, which should supply the following types and methods:
+// InstrusiveSortedDeque: A deque containing sorted values, which should be default constructible and supply the following types and methods:
 // * typedef KeyType
 // * KeyType GetKey() const;
 // * IsDeleted() const; - indicating that a value should be considered as removed
@@ -90,7 +90,7 @@ public:
 
 	InstrusiveSortedDeque<T>& operator=(const InstrusiveSortedDeque<T>& other)
 	{
-		assign(other.cbegin(), other.cend());
+		Clone(other);
 		return *this;
 	}
 
@@ -322,6 +322,14 @@ private:
 
 		result = this->StdDeque::end();
 		return false;
+	}
+
+	void Clone(const InstrusiveSortedDeque& other)
+	{
+		StdDeque::resize(other.size());		// Pre-allocate space if necessary
+		constexpr auto pred = [](const value_type& r) { return ! r.IsDeleted(); };
+		std::copy_if(other.StdDeque::begin(), other.StdDeque::end(), StdDeque::begin(), pred);
+		m_nMarkedAsErased = 0;
 	}
 
 	// Filter iterator wrapping implementation
