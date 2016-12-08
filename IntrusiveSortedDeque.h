@@ -1,5 +1,5 @@
 /*
- * InstrusiveDeque.h
+ * InstrusiveSortedDeque.h
  *
  *  Created on: Dec 4, 2016
  *      Author: yitzikc
@@ -19,7 +19,7 @@ namespace Utils {
 // * typedef KeyType
 // * KeyType GetKey() const;
 // * IsDeleted() const; - indicating that a value should be considered as removed
-// * Remove()		  - Designates a value as empty.
+// * Remove()		    - Designates a value as deleted.
 
 template <typename T>	// TODO: Add other template args allowing the allocator to be customized
 class InstrusiveSortedDeque : public std::deque<T> {
