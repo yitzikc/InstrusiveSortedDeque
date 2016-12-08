@@ -60,8 +60,8 @@ public:
 		friend class InstrusiveSortedDeque;
 
 		explicit constexpr quick_key_type(int index = INVALID_INDEX)
+			: m_index(index)
 		{
-			m_index = index;
 		}
 
 	public:
