@@ -66,7 +66,7 @@ public:
 
 	public:
 		constexpr quick_key_type(const quick_key_type&) = default;
-		constexpr quick_key_type& operator=(const quick_key_type&) = default;
+		BOOST_CXX14_CONSTEXPR quick_key_type& operator=(const quick_key_type&) = default;
 		constexpr bool is_valid() const { return m_index >= MIN_VALID_INDEX; }
 		constexpr bool is_front() const { return m_index == MIN_VALID_INDEX; }
 		constexpr bool operator==(quick_key_type other) { return other.m_index == m_index; }
